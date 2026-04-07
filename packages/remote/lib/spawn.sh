@@ -20,7 +20,10 @@ cmd_spawn() {
 
   : "${NAME:?task.conf must set NAME}"
   : "${REMOTE:=remote-host}"
-  : "${PROMPT:?task.conf must set PROMPT (string) or PROMPT_FILE (path)}"
+  if [[ -z "${PROMPT:-}" && -z "${PROMPT_FILE:-}" ]]; then
+    echo "[spawn] ERROR: task.conf must set PROMPT (string) or PROMPT_FILE (path)" >&2
+    return 1
+  fi
   # Optional extra args passed to `claude -p` (e.g. "--bare --permission-mode bypassPermissions")
   local CLAUDE_ARGS="${CLAUDE_ARGS:-}"
   # Optional: path to a settings.json that will be the SOLE config the bg
@@ -64,8 +67,13 @@ cmd_spawn() {
   local prompt_file_remote="$REMOTE_INPUT_DIR/_prompt.txt"
   printf '%s' "$effective_prompt" | _ccr_write "$prompt_file_remote"
 
-  # If ISOLATE_HOOKS_FILE set, push it to the remote-input dir as a known
-  # filename. The runner will copy it into an iso HOME before exec.
+  # If ISOLATE_HOOKS_FILE set, push it to the remote-input dir. The runner
+  # builds an isolated HOME by SYMLINKING every entry in real ~/.claude/*
+  # except settings.json (which it overlays with the iso file). This is
+  # auth-scheme agnostic: file creds, macOS Keychain (system-level, reachable
+  # from any HOME), env var (inherited), and any future state files all
+  # work without enumerating their names. HOME override is OS-level so it
+  # doesn't drift between claude CLI versions like --setting-sources does.
   local iso_remote=""
   if [[ -n "$ISOLATE_HOOKS_FILE" ]]; then
     if [[ ! -f "$ISOLATE_HOOKS_FILE" ]]; then
@@ -74,7 +82,6 @@ cmd_spawn() {
     fi
     iso_remote="$REMOTE_INPUT_DIR/_iso_settings.json"
     _ccr_copy "$REMOTE_INPUT_DIR" "$ISOLATE_HOOKS_FILE"
-    # _ccr_copy preserves source basename; rename to _iso_settings.json
     local src_base
     src_base="$(basename "$ISOLATE_HOOKS_FILE")"
     _ccr_run "mv ~/$REMOTE_INPUT_DIR/$src_base ~/$iso_remote"
@@ -93,8 +100,29 @@ if [[ -n "$iso_remote" && -f "\$ORIG_HOME/$iso_remote" ]]; then
   ISO_HOME="\$ORIG_HOME/.cache/claude-code-remote/iso/$NAME"
   rm -rf "\$ISO_HOME"
   mkdir -p "\$ISO_HOME/.claude"
+  # Overlay the isolated settings.json (the only thing we want different)
   cp "\$ORIG_HOME/$iso_remote" "\$ISO_HOME/.claude/settings.json"
-  echo "isolated HOME: \$ISO_HOME" >> "\$LOG"
+  # Curated symlinks of auth-related state from real ~/.claude/. We do NOT
+  # symlink everything because empirically (verified via bisect on Linux
+  # claude 2.1.90) symlinking ~/.claude/scripts/ causes claude to load the
+  # USER's full settings.json — likely a parent-dir walk from scripts/
+  # finds the real settings.json and merges it, defeating isolation. The
+  # safe set is auth + minimal session state; hook-script directories
+  # (scripts/, plugins/, agents/, skills/) are NEVER symlinked.
+  for f in .credentials.json .credentials .credentials.json.backup mcp-needs-auth-cache.json policy-limits.json; do
+    if [[ -e "\$ORIG_HOME/.claude/\$f" ]]; then
+      ln -sf "\$ORIG_HOME/.claude/\$f" "\$ISO_HOME/.claude/\$f"
+    fi
+  done
+  # Top-level ~/.claude.json (project metadata, separate from .claude/ dir).
+  # Without this, claude warns about missing config (no functional impact
+  # but spams the run log).
+  for f in .claude.json .claude.json.backup; do
+    if [[ -e "\$ORIG_HOME/\$f" ]]; then
+      ln -sf "\$ORIG_HOME/\$f" "\$ISO_HOME/\$f"
+    fi
+  done
+  echo "isolated HOME: \$ISO_HOME (settings overlaid, auth-only symlinks)" >> "\$LOG"
   HOME="\$ISO_HOME" claude -p $CLAUDE_ARGS "\$(cat \$ORIG_HOME/$prompt_file_remote)" >> "\$LOG" 2>&1
 else
   claude -p $CLAUDE_ARGS "\$(cat \$ORIG_HOME/$prompt_file_remote)" >> "\$LOG" 2>&1
