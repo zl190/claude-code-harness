@@ -17,7 +17,7 @@ cmd_recover() {
   if [[ "$target" == "all" ]]; then
     # Recover every task in cc-remote-output
     local names
-    names=$(ssh "$REMOTE" "ls cc-remote-output/ 2>/dev/null || true")
+    names=$(_ccr_run "ls cc-remote-output/ 2>/dev/null || true")
     if [[ -z "$names" ]]; then
       echo "[recover] no tasks to recover"
       return 0
@@ -48,9 +48,8 @@ _recover_one() {
   local retry_count=0
   while true; do
     # Step 1: rsync remote output to local staging
-    rsync -avz --no-perms --no-owner --no-group \
-      "$REMOTE:$REMOTE_OUTPUT_DIR/" "$STAGING/" 2>&1 | tail -3 || {
-      echo "[recover] ERROR: rsync failed for $name" >&2
+    _ccr_pull "$REMOTE_OUTPUT_DIR" "$STAGING" || {
+      echo "[recover] ERROR: pull failed for $name" >&2
       return 1
     }
 
@@ -115,22 +114,22 @@ already passed QC."
 
     # Append retry context to remote prompt and restart the runner
     local prompt_remote="cc-remote-input/$name/_prompt.txt"
-    ssh "$REMOTE" "cat >> ~/$prompt_remote" <<RETRY_EOF
+    cat <<RETRY_EOF | _ccr_write_append "$prompt_remote"
 
 ---
 RETRY ATTEMPT $retry_count of $RETRY_MAX:
 $retry_context
 RETRY_EOF
 
-    ssh "$REMOTE" "tmux kill-session -t ccr-$name 2>/dev/null; \
-                   : > ~/cc-remote-output/$name/run.log; \
-                   tmux new-session -d -s ccr-$name '~/cc-remote-output/$name/_runner.sh'"
+    _ccr_run "tmux kill-session -t ccr-$name 2>/dev/null; \
+              : > ~/cc-remote-output/$name/run.log; \
+              tmux new-session -d -s ccr-$name '~/cc-remote-output/$name/_runner.sh'"
 
     # Wait for the new DONE marker before looping back to rsync
     local elapsed=0
     local interval=5
     while [[ $elapsed -lt $RETRY_WAIT_TIMEOUT ]]; do
-      if ssh "$REMOTE" "grep -q '^DONE' ~/$REMOTE_OUTPUT_DIR/run.log 2>/dev/null"; then
+      if _ccr_run "grep -q '^DONE' ~/$REMOTE_OUTPUT_DIR/run.log 2>/dev/null"; then
         break
       fi
       sleep $interval
@@ -159,7 +158,7 @@ cmd_wait_then_recover() {
   local elapsed=0
   local interval=5
   while [[ $elapsed -lt $TIMEOUT ]]; do
-    if ssh "$REMOTE" "grep -q '^DONE' ~/cc-remote-output/$NAME/run.log 2>/dev/null"; then
+    if _ccr_run "grep -q '^DONE' ~/cc-remote-output/$NAME/run.log 2>/dev/null"; then
       _recover_one "$NAME"
       return $?
     fi

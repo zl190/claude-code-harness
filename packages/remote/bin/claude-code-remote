@@ -33,6 +33,7 @@ _resolve_real() {
 readonly _REAL_BIN="$(_resolve_real "${BASH_SOURCE[0]}")"
 readonly LIB_DIR="$(cd "$(dirname "$_REAL_BIN")/../lib" && pwd)"
 
+source "$LIB_DIR/_transport.sh"
 source "$LIB_DIR/snapshot.sh"
 source "$LIB_DIR/spawn.sh"
 source "$LIB_DIR/status.sh"
@@ -53,7 +54,7 @@ case "$cmd" in
   attach)          cmd_attach     "$@" ;;
   recover)         cmd_recover    "$@" ;;
   run)             # snapshot → spawn → wait-for-done → recover
-    cmd_snapshot && \
+    cmd_snapshot "$@" && \
     cmd_spawn "$@" && \
     cmd_wait_then_recover "$@"
     ;;

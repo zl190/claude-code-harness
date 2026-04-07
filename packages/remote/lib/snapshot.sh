@@ -25,6 +25,12 @@ cmd_snapshot() {
     source "$task_conf"
   fi
 
+  # Local mode: source == dest, snapshot is a no-op.
+  if [[ "$REMOTE" == "local" ]]; then
+    echo "[snapshot] REMOTE=local — no-op (logs already on local disk)"
+    return 0
+  fi
+
   # Filter to existing files only — missing logs are not errors
   local existing=()
   local p
