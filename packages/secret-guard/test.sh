@@ -9,8 +9,8 @@
 
 set -uo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOOK="${REPO_DIR}/hooks/secret-guard.sh"
+PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK="${PKG_DIR}/hook.sh"
 
 if [[ ! -x "$HOOK" ]]; then
   echo "ERROR: hook not executable at $HOOK" >&2

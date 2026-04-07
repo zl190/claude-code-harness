@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# claude-code-remote — delegate Claude Code tasks to a remote machine
+#
+# Usage:
+#   claude-code-remote snapshot                 Sync local state to remote workspace
+#   claude-code-remote spawn   <task.conf>      Start a remote task in tmux
+#   claude-code-remote status                   One-line per running task
+#   claude-code-remote attach  <task-name>      ssh + tmux attach to a live task
+#   claude-code-remote recover <task-name|all>  Pull results back, run QC, retry on fail
+#   claude-code-remote run     <task.conf>      Convenience: snapshot+spawn+wait+recover
+#   claude-code-remote help                     Show this message
+#
+# Pure shell. Depends on: ssh, rsync, tmux (remote), bash >= 3.2.
+
+set -uo pipefail
+
+# Resolve symlinks so lib/ is found regardless of whether this file is
+# invoked from the repo directly or from a symlink in ~/.local/bin/.
+# macOS doesn't ship `readlink -f`; this is a portable walk.
+_resolve_real() {
+  local p="$1"
+  while [ -L "$p" ]; do
+    local target
+    target="$(readlink "$p")"
+    case "$target" in
+      /*) p="$target" ;;
+      *)  p="$(cd "$(dirname "$p")" && pwd)/$target" ;;
+    esac
+  done
+  printf '%s' "$p"
+}
+
+readonly _REAL_BIN="$(_resolve_real "${BASH_SOURCE[0]}")"
+readonly LIB_DIR="$(cd "$(dirname "$_REAL_BIN")/../lib" && pwd)"
+
+source "$LIB_DIR/snapshot.sh"
+source "$LIB_DIR/spawn.sh"
+source "$LIB_DIR/status.sh"
+source "$LIB_DIR/recover.sh"
+source "$LIB_DIR/qc.sh"
+
+usage() {
+  sed -n '2,16p' "$0" | sed 's/^# \?//'
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  snapshot)        cmd_snapshot   "$@" ;;
+  spawn)           cmd_spawn      "$@" ;;
+  status)          cmd_status     "$@" ;;
+  attach)          cmd_attach     "$@" ;;
+  recover)         cmd_recover    "$@" ;;
+  run)             # snapshot → spawn → wait-for-done → recover
+    cmd_snapshot && \
+    cmd_spawn "$@" && \
+    cmd_wait_then_recover "$@"
+    ;;
+  help|-h|--help)  usage ;;
+  *)
+    echo "unknown command: $cmd" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
