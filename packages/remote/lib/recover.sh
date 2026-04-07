@@ -112,6 +112,13 @@ already passed QC."
     echo "[recover] $name: QC failed, retry $retry_count/$RETRY_MAX"
     printf '[recover]   %s\n' "${qc_fail_reasons[@]}"
 
+    # Remove the previous queue entry for this task name before re-spawning.
+    # The new runner will append a fresh entry on DONE, so without this we'd
+    # accumulate one queue line per retry attempt.
+    if declare -F _queue_remove_name >/dev/null 2>&1; then
+      _queue_remove_name "$name" 2>/dev/null || true
+    fi
+
     # Append retry context to remote prompt and restart the runner
     local prompt_remote="cc-remote-input/$name/_prompt.txt"
     cat <<RETRY_EOF | _ccr_write_append "$prompt_remote"
