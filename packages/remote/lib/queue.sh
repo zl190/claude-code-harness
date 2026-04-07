@@ -23,26 +23,20 @@
 #     --auto            Quiet mode: no prompts, exit 0 if nothing to pull
 #                       (suitable for cron / launchd)
 
-# Helper: queue path resolution
-_queue_path_remote() {
-  # Returns the queue path string suitable for use inside _ccr_run "..." (the
-  # remote shell will expand $HOME if REMOTE != local; locally we pass the
-  # already-expanded path)
-  if [[ "${REMOTE:-}" == "local" ]]; then
-    echo "$HOME/cc-remote-output/.completion-queue.jsonl"
-  else
-    echo '$HOME/cc-remote-output/.completion-queue.jsonl'
-  fi
-}
+# The queue file path is always relative to the remote (or local) HOME.
+# We use a fixed relative path so the helpers can hand it directly to
+# _ccr_run / _ccr_write without any prefix juggling.
+readonly _CCR_QUEUE_REL="cc-remote-output/.completion-queue.jsonl"
 
 # Helper: pull the queue file from the remote to a local temp file.
 # Echoes the local temp path on success, returns nonzero if the queue is empty
 # or missing.
 _queue_pull_to_temp() {
-  local remote_path="$1"
   local local_tmp
   local_tmp=$(mktemp -t cc-queue-XXXXXX)
-  if ! _ccr_run "test -f $remote_path && cat $remote_path" > "$local_tmp" 2>/dev/null; then
+  # _ccr_run handles local-vs-ssh dispatch; "~/" is expanded by the shell
+  # on the remote (or local) side. Result of cat goes to our local stdout.
+  if ! _ccr_run "test -f \$HOME/$_CCR_QUEUE_REL && cat \$HOME/$_CCR_QUEUE_REL" > "$local_tmp" 2>/dev/null; then
     rm -f "$local_tmp"
     return 1
   fi
@@ -56,23 +50,20 @@ _queue_pull_to_temp() {
 # Helper: push a local file to the remote queue path (overwrite).
 _queue_push_from_temp() {
   local local_tmp="$1"
-  local remote_path="$2"
-  cat "$local_tmp" | _ccr_write "${remote_path#\$HOME/}"
+  cat "$local_tmp" | _ccr_write "$_CCR_QUEUE_REL"
 }
 
 # Helper: mark a queue entry pulled=true. Safe against any name (jq runs
 # locally with proper --arg, no shell quoting in the filter).
 _queue_mark_pulled() {
   local name="$1"
-  local rpath
-  rpath=$(_queue_path_remote)
   local local_tmp
-  local_tmp=$(_queue_pull_to_temp "$rpath") || return 0  # nothing to mark
+  local_tmp=$(_queue_pull_to_temp) || return 0  # nothing to mark
   local out_tmp
   out_tmp=$(mktemp -t cc-queue-out-XXXXXX)
   jq -c --arg n "$name" 'if .name == $n then .pulled = true else . end' \
     "$local_tmp" > "$out_tmp"
-  _queue_push_from_temp "$out_tmp" "$rpath"
+  _queue_push_from_temp "$out_tmp"
   rm -f "$local_tmp" "$out_tmp"
 }
 
@@ -80,14 +71,12 @@ _queue_mark_pulled() {
 # before retrying a task to prevent duplicate entries from accumulating.
 _queue_remove_name() {
   local name="$1"
-  local rpath
-  rpath=$(_queue_path_remote)
   local local_tmp
-  local_tmp=$(_queue_pull_to_temp "$rpath") || return 0
+  local_tmp=$(_queue_pull_to_temp) || return 0
   local out_tmp
   out_tmp=$(mktemp -t cc-queue-out-XXXXXX)
   jq -c --arg n "$name" 'select(.name != $n)' "$local_tmp" > "$out_tmp"
-  _queue_push_from_temp "$out_tmp" "$rpath"
+  _queue_push_from_temp "$out_tmp"
   rm -f "$local_tmp" "$out_tmp"
 }
 
@@ -105,12 +94,10 @@ cmd_pull_queue() {
   done
 
   REMOTE="${remote_override:-${REMOTE:-remote-host}}"
-  local rpath
-  rpath=$(_queue_path_remote)
 
   # Pull the queue file to a local temp for safe processing
   local local_tmp
-  if ! local_tmp=$(_queue_pull_to_temp "$rpath"); then
+  if ! local_tmp=$(_queue_pull_to_temp); then
     if ! $auto_mode; then
       echo "[pull-queue] empty queue on $REMOTE — nothing to pull"
     fi
@@ -129,24 +116,34 @@ cmd_pull_queue() {
     return 0
   fi
 
-  local total_unpulled
-  total_unpulled=$(echo "$unpulled_names" | wc -l | tr -d ' ')
+  # Read all names into an array BEFORE the recover loop. The previous
+  # `while read; do cmd_recover; done <<< "$unpulled_names"` pattern was
+  # buggy because cmd_recover internally calls ssh, and ssh reads from
+  # stdin by default — slurping the rest of the loop's input. Symptom:
+  # pull-queue would say "N entries to pull" then process only 1 and
+  # exit. Reading into an array first decouples iteration from stdin.
+  local -a names_arr=()
+  while IFS= read -r n; do
+    [[ -z "$n" ]] && continue
+    names_arr+=("$n")
+  done <<< "$unpulled_names"
+
+  local total_unpulled=${#names_arr[@]}
   echo "[pull-queue] $total_unpulled entry(ies) to pull from $REMOTE"
 
   local pulled_count=0
   local failed_count=0
   local n
-  while IFS= read -r n; do
-    [[ -z "$n" ]] && continue
+  for n in "${names_arr[@]}"; do
     echo "[pull-queue]   pulling $n..."
-    if cmd_recover "$n"; then
+    if cmd_recover "$n" </dev/null; then
       pulled_count=$((pulled_count + 1))
       _queue_mark_pulled "$n"
     else
       failed_count=$((failed_count + 1))
       echo "[pull-queue]   FAILED $n (will retry next pull-queue)"
     fi
-  done <<< "$unpulled_names"
+  done
 
   rm -f "$local_tmp"
   echo "[pull-queue] done — $pulled_count pulled, $failed_count failed"
