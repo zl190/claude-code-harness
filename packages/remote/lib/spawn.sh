@@ -23,6 +23,12 @@ cmd_spawn() {
   : "${PROMPT:?task.conf must set PROMPT (string) or PROMPT_FILE (path)}"
   # Optional extra args passed to `claude -p` (e.g. "--bare --permission-mode bypassPermissions")
   local CLAUDE_ARGS="${CLAUDE_ARGS:-}"
+  # Optional: path to a settings.json that will be the SOLE config the bg
+  # `claude -p` sees. Implemented via HOME= override (verified to be the
+  # only primitive that fully isolates — CLAUDE_CONFIG_DIR merges, --bare
+  # is too aggressive). Used by validation re-runs that need to test one
+  # specific hook in isolation from the user's full hook set.
+  local ISOLATE_HOOKS_FILE="${ISOLATE_HOOKS_FILE:-}"
 
   local REMOTE_INPUT_DIR="${REMOTE_INPUT_DIR:-cc-remote-input/$NAME}"
   local REMOTE_OUTPUT_DIR="${REMOTE_OUTPUT_DIR:-cc-remote-output/$NAME}"
@@ -58,15 +64,41 @@ cmd_spawn() {
   local prompt_file_remote="$REMOTE_INPUT_DIR/_prompt.txt"
   printf '%s' "$effective_prompt" | _ccr_write "$prompt_file_remote"
 
+  # If ISOLATE_HOOKS_FILE set, push it to the remote-input dir as a known
+  # filename. The runner will copy it into an iso HOME before exec.
+  local iso_remote=""
+  if [[ -n "$ISOLATE_HOOKS_FILE" ]]; then
+    if [[ ! -f "$ISOLATE_HOOKS_FILE" ]]; then
+      echo "[spawn] ERROR: ISOLATE_HOOKS_FILE not found: $ISOLATE_HOOKS_FILE" >&2
+      return 1
+    fi
+    iso_remote="$REMOTE_INPUT_DIR/_iso_settings.json"
+    _ccr_copy "$REMOTE_INPUT_DIR" "$ISOLATE_HOOKS_FILE"
+    # _ccr_copy preserves source basename; rename to _iso_settings.json
+    local src_base
+    src_base="$(basename "$ISOLATE_HOOKS_FILE")"
+    _ccr_run "mv ~/$REMOTE_INPUT_DIR/$src_base ~/$iso_remote"
+  fi
+
   # Build the runner script (lives in output dir alongside the run.log)
   local runner_remote="$REMOTE_OUTPUT_DIR/_runner.sh"
   _ccr_write "$runner_remote" <<RUNNER_EOF
 #!/usr/bin/env bash
 set -uo pipefail
-LOG=\$HOME/$REMOTE_OUTPUT_DIR/run.log
+ORIG_HOME="\$HOME"
+LOG="\$ORIG_HOME/$REMOTE_OUTPUT_DIR/run.log"
 echo "=== START \$(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >> "\$LOG"
 echo "task: $NAME" >> "\$LOG"
-claude -p $CLAUDE_ARGS "\$(cat \$HOME/$prompt_file_remote)" >> "\$LOG" 2>&1
+if [[ -n "$iso_remote" && -f "\$ORIG_HOME/$iso_remote" ]]; then
+  ISO_HOME="\$ORIG_HOME/.cache/claude-code-remote/iso/$NAME"
+  rm -rf "\$ISO_HOME"
+  mkdir -p "\$ISO_HOME/.claude"
+  cp "\$ORIG_HOME/$iso_remote" "\$ISO_HOME/.claude/settings.json"
+  echo "isolated HOME: \$ISO_HOME" >> "\$LOG"
+  HOME="\$ISO_HOME" claude -p $CLAUDE_ARGS "\$(cat \$ORIG_HOME/$prompt_file_remote)" >> "\$LOG" 2>&1
+else
+  claude -p $CLAUDE_ARGS "\$(cat \$ORIG_HOME/$prompt_file_remote)" >> "\$LOG" 2>&1
+fi
 echo "=== END \$(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >> "\$LOG"
 echo DONE >> "\$LOG"
 RUNNER_EOF
