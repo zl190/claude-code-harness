@@ -8,6 +8,7 @@
 #   claude-code-remote attach  <task-name>      ssh + tmux attach to a live task
 #   claude-code-remote recover <task-name|all>  Pull results back, run QC, retry on fail
 #   claude-code-remote run     <task.conf>      Convenience: snapshot+spawn+wait+recover
+#   claude-code-remote pull-queue [--auto]      Drain unrecovered tasks from remote queue
 #   claude-code-remote help                     Show this message
 #
 # Pure shell. Depends on: ssh, rsync, tmux (remote), bash >= 3.2.
@@ -39,6 +40,7 @@ source "$LIB_DIR/spawn.sh"
 source "$LIB_DIR/status.sh"
 source "$LIB_DIR/recover.sh"
 source "$LIB_DIR/qc.sh"
+source "$LIB_DIR/queue.sh"
 
 usage() {
   sed -n '2,16p' "$0" | sed 's/^# \?//'
@@ -53,6 +55,7 @@ case "$cmd" in
   status)          cmd_status     "$@" ;;
   attach)          cmd_attach     "$@" ;;
   recover)         cmd_recover    "$@" ;;
+  pull-queue)      cmd_pull_queue "$@" ;;
   run)             # snapshot → spawn → wait-for-done → recover
     cmd_snapshot "$@" && \
     cmd_spawn "$@" && \

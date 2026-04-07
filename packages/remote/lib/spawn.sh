@@ -27,11 +27,17 @@ cmd_spawn() {
   # Optional extra args passed to `claude -p` (e.g. "--bare --permission-mode bypassPermissions")
   local CLAUDE_ARGS="${CLAUDE_ARGS:-}"
   # Optional: path to a settings.json that will be the SOLE config the bg
-  # `claude -p` sees. Implemented via HOME= override (verified to be the
-  # only primitive that fully isolates — CLAUDE_CONFIG_DIR merges, --bare
-  # is too aggressive). Used by validation re-runs that need to test one
-  # specific hook in isolation from the user's full hook set.
+  # `claude -p` sees. Implemented via HOME= override.
   local ISOLATE_HOOKS_FILE="${ISOLATE_HOOKS_FILE:-}"
+  # Optional: webhook URL fired on task completion. Posts JSON with status +
+  # tail of log. Use Discord webhook URL or any HTTP endpoint accepting JSON.
+  local NOTIFY_WEBHOOK_URL="${NOTIFY_WEBHOOK_URL:-}"
+  # When to fire NOTIFY_WEBHOOK_URL: success | failure | both. Default: both.
+  local NOTIFY_ON="${NOTIFY_ON:-both}"
+  # Optional: append a one-line completion record to a JSONL queue file on the
+  # remote. macbook can later run `claude-code-remote pull-queue` to drain
+  # unrecovered entries. Default queue path is ~/cc-remote-output/.completion-queue.jsonl
+  local QUEUE_ENABLE="${QUEUE_ENABLE:-true}"
 
   local REMOTE_INPUT_DIR="${REMOTE_INPUT_DIR:-cc-remote-input/$NAME}"
   local REMOTE_OUTPUT_DIR="${REMOTE_OUTPUT_DIR:-cc-remote-output/$NAME}"
@@ -124,11 +130,46 @@ if [[ -n "$iso_remote" && -f "\$ORIG_HOME/$iso_remote" ]]; then
   done
   echo "isolated HOME: \$ISO_HOME (settings overlaid, auth-only symlinks)" >> "\$LOG"
   HOME="\$ISO_HOME" claude -p $CLAUDE_ARGS "\$(cat \$ORIG_HOME/$prompt_file_remote)" >> "\$LOG" 2>&1
+  CLAUDE_EXIT=\$?
 else
   claude -p $CLAUDE_ARGS "\$(cat \$ORIG_HOME/$prompt_file_remote)" >> "\$LOG" 2>&1
+  CLAUDE_EXIT=\$?
 fi
-echo "=== END \$(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >> "\$LOG"
+echo "=== END \$(date -u +%Y-%m-%dT%H:%M:%SZ) (claude exit: \$CLAUDE_EXIT) ===" >> "\$LOG"
 echo DONE >> "\$LOG"
+
+# === Phase F: Discord webhook notification ===
+NOTIFY_URL="$NOTIFY_WEBHOOK_URL"
+NOTIFY_ON="$NOTIFY_ON"
+if [[ -n "\$NOTIFY_URL" ]]; then
+  if [[ \$CLAUDE_EXIT -eq 0 ]]; then status="success"; else status="failure"; fi
+  fire="false"
+  case "\$NOTIFY_ON" in
+    success) [[ "\$status" == "success" ]] && fire="true" ;;
+    failure) [[ "\$status" == "failure" ]] && fire="true" ;;
+    both)    fire="true" ;;
+  esac
+  if [[ "\$fire" == "true" ]]; then
+    tail_log=\$(tail -25 "\$LOG" 2>/dev/null || echo "(log unavailable)")
+    payload=\$(jq -cn --arg n "$NAME" --arg s "\$status" --arg t "\$tail_log" \\
+      '{content: ("**" + \$n + "** " + \$s + "\\n\`\`\`\\n" + \$t + "\\n\`\`\`")}' 2>/dev/null || echo "")
+    if [[ -n "\$payload" ]]; then
+      curl -fsS -X POST -H "Content-Type: application/json" \\
+        -d "\$payload" "\$NOTIFY_URL" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
+# === Phase G: completion-queue append ===
+QUEUE_ENABLE="$QUEUE_ENABLE"
+if [[ "\$QUEUE_ENABLE" == "true" ]]; then
+  QUEUE="\$ORIG_HOME/cc-remote-output/.completion-queue.jsonl"
+  if [[ \$CLAUDE_EXIT -eq 0 ]]; then status="success"; else status="failure"; fi
+  { jq -cn --arg n "$NAME" --arg ts "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
+       --arg dir "\$ORIG_HOME/$REMOTE_OUTPUT_DIR" --arg s "\$status" \\
+       '{name:\$n, completed_at:\$ts, output_dir:\$dir, status:\$s, pulled:false}' \\
+       >> "\$QUEUE"; } 2>/dev/null
+fi
 RUNNER_EOF
   _ccr_run "chmod +x ~/$runner_remote"
 
