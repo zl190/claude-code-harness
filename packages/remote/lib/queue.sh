@@ -16,12 +16,80 @@
 #                        old pulled entries (not implemented v0.5; manual jq)
 #
 # Usage:
-#   claude-code-remote pull-queue [--remote myserver] [--auto]
+#   claude-code-remote pull-queue [--remote remote-host] [--auto]
 #
 #     --remote <name>   Override REMOTE (default: read from REMOTE env or
 #                       fall back to "remote-host")
 #     --auto            Quiet mode: no prompts, exit 0 if nothing to pull
 #                       (suitable for cron / launchd)
+
+# Helper: queue path resolution
+_queue_path_remote() {
+  # Returns the queue path string suitable for use inside _ccr_run "..." (the
+  # remote shell will expand $HOME if REMOTE != local; locally we pass the
+  # already-expanded path)
+  if [[ "${REMOTE:-}" == "local" ]]; then
+    echo "$HOME/cc-remote-output/.completion-queue.jsonl"
+  else
+    echo '$HOME/cc-remote-output/.completion-queue.jsonl'
+  fi
+}
+
+# Helper: pull the queue file from the remote to a local temp file.
+# Echoes the local temp path on success, returns nonzero if the queue is empty
+# or missing.
+_queue_pull_to_temp() {
+  local remote_path="$1"
+  local local_tmp
+  local_tmp=$(mktemp -t cc-queue-XXXXXX)
+  if ! _ccr_run "test -f $remote_path && cat $remote_path" > "$local_tmp" 2>/dev/null; then
+    rm -f "$local_tmp"
+    return 1
+  fi
+  if [[ ! -s "$local_tmp" ]]; then
+    rm -f "$local_tmp"
+    return 1
+  fi
+  echo "$local_tmp"
+}
+
+# Helper: push a local file to the remote queue path (overwrite).
+_queue_push_from_temp() {
+  local local_tmp="$1"
+  local remote_path="$2"
+  cat "$local_tmp" | _ccr_write "${remote_path#\$HOME/}"
+}
+
+# Helper: mark a queue entry pulled=true. Safe against any name (jq runs
+# locally with proper --arg, no shell quoting in the filter).
+_queue_mark_pulled() {
+  local name="$1"
+  local rpath
+  rpath=$(_queue_path_remote)
+  local local_tmp
+  local_tmp=$(_queue_pull_to_temp "$rpath") || return 0  # nothing to mark
+  local out_tmp
+  out_tmp=$(mktemp -t cc-queue-out-XXXXXX)
+  jq -c --arg n "$name" 'if .name == $n then .pulled = true else . end' \
+    "$local_tmp" > "$out_tmp"
+  _queue_push_from_temp "$out_tmp" "$rpath"
+  rm -f "$local_tmp" "$out_tmp"
+}
+
+# Helper: remove all queue entries matching a given name. Used by recover.sh
+# before retrying a task to prevent duplicate entries from accumulating.
+_queue_remove_name() {
+  local name="$1"
+  local rpath
+  rpath=$(_queue_path_remote)
+  local local_tmp
+  local_tmp=$(_queue_pull_to_temp "$rpath") || return 0
+  local out_tmp
+  out_tmp=$(mktemp -t cc-queue-out-XXXXXX)
+  jq -c --arg n "$name" 'select(.name != $n)' "$local_tmp" > "$out_tmp"
+  _queue_push_from_temp "$out_tmp" "$rpath"
+  rm -f "$local_tmp" "$out_tmp"
+}
 
 cmd_pull_queue() {
   local remote_override=""
@@ -36,34 +104,28 @@ cmd_pull_queue() {
     esac
   done
 
-  local REMOTE="${remote_override:-${REMOTE:-remote-host}}"
+  REMOTE="${remote_override:-${REMOTE:-remote-host}}"
+  local rpath
+  rpath=$(_queue_path_remote)
 
-  # Read the queue file from the remote
-  local queue_path
-  if [[ "$REMOTE" == "local" ]]; then
-    queue_path="$HOME/cc-remote-output/.completion-queue.jsonl"
-  else
-    queue_path='$HOME/cc-remote-output/.completion-queue.jsonl'
-  fi
-
-  local queue_content
-  queue_content=$(_ccr_run "test -f $queue_path && cat $queue_path || echo")
-
-  if [[ -z "$queue_content" ]]; then
+  # Pull the queue file to a local temp for safe processing
+  local local_tmp
+  if ! local_tmp=$(_queue_pull_to_temp "$rpath"); then
     if ! $auto_mode; then
       echo "[pull-queue] empty queue on $REMOTE — nothing to pull"
     fi
     return 0
   fi
 
-  # Find entries with pulled=false
+  # Find entries with pulled=false (jq runs locally on the temp file)
   local unpulled_names
-  unpulled_names=$(echo "$queue_content" | jq -r 'select(.pulled == false) | .name' 2>/dev/null)
+  unpulled_names=$(jq -r 'select(.pulled == false) | .name' "$local_tmp" 2>/dev/null)
 
   if [[ -z "$unpulled_names" ]]; then
     if ! $auto_mode; then
       echo "[pull-queue] all entries already pulled — nothing to do"
     fi
+    rm -f "$local_tmp"
     return 0
   fi
 
@@ -79,14 +141,14 @@ cmd_pull_queue() {
     echo "[pull-queue]   pulling $n..."
     if cmd_recover "$n"; then
       pulled_count=$((pulled_count + 1))
-      # Mark as pulled in the remote queue file (in-place rewrite via jq)
-      _ccr_run "jq -c --arg n '$n' 'if .name == \$n then .pulled = true else . end' $queue_path > $queue_path.tmp && mv $queue_path.tmp $queue_path"
+      _queue_mark_pulled "$n"
     else
       failed_count=$((failed_count + 1))
       echo "[pull-queue]   FAILED $n (will retry next pull-queue)"
     fi
   done <<< "$unpulled_names"
 
+  rm -f "$local_tmp"
   echo "[pull-queue] done — $pulled_count pulled, $failed_count failed"
   return 0
 }
