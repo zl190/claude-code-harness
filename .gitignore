@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Test artifacts and sandbox runs
+*.bak.*
+*.tmp.*
+/tmp/
+
+# Local design / strategy notes (per memory/knowledge/output-styles/readme.md
+# Marketing QC rules: design specs and launch playbooks must not be public).
+design/
+.design/

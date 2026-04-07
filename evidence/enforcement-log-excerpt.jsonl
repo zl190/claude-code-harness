@@ -1,0 +1,28 @@
+{"ts":"2026-04-02T15:40:58Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-02T15:40:59Z","hook":"secret-guard","verdict":"DENY","reason":"echo of secret env var would display its value"}
+{"ts":"2026-04-02T15:41:00Z","hook":"secret-guard","verdict":"DENY","reason":"reading a credential file would expose secrets"}
+{"ts":"2026-04-02T23:05:17Z","hook":"secret-guard","verdict":"DENY","reason":"echo of secret env var would display its value"}
+{"ts":"2026-04-02T23:05:22Z","hook":"secret-guard","verdict":"DENY","reason":"echo of secret env var would display its value"}
+{"ts":"2026-04-02T23:05:42Z","hook":"secret-guard","verdict":"DENY","reason":"export -p dumps all exported variables including secrets"}
+{"ts":"2026-04-02T23:06:14Z","hook":"secret-guard","verdict":"DENY","reason":"reading a credential file would expose secrets"}
+{"ts":"2026-04-02T23:06:14Z","hook":"secret-guard","verdict":"DENY","reason":"reading a credential file would expose secrets"}
+{"ts":"2026-04-02T23:06:14Z","hook":"secret-guard","verdict":"DENY","reason":"reading a credential file would expose secrets"}
+{"ts":"2026-04-02T23:06:14Z","hook":"secret-guard","verdict":"DENY","reason":"env/printenv dumps all variables including secrets"}
+{"ts":"2026-04-02T23:06:14Z","hook":"secret-guard","verdict":"DENY","reason":"diff on .env files would display all secrets"}
+{"ts":"2026-04-02T23:06:14Z","hook":"secret-guard","verdict":"DENY","reason":"language one-liner would dump all environment variables"}
+{"ts":"2026-04-02T23:06:14Z","hook":"secret-guard","verdict":"DENY","reason":"SSH remote command would expose secrets from remote host"}
+{"ts":"2026-04-02T23:06:15Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-02T23:06:15Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-02T23:06:15Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-02T23:09:02Z","hook":"secret-guard","verdict":"DENY","reason":"reading a credential file would expose secrets"}
+{"ts":"2026-04-02T23:09:42Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-04T06:18:22Z","hook":"secret-guard","verdict":"DENY","reason":"echo of secret env var would display its value"}
+{"ts":"2026-04-04T12:08:57Z","hook":"secret-guard","verdict":"DENY","reason":"reading a credential file would expose secrets"}
+{"ts":"2026-04-05T07:21:31Z","hook":"secret-guard","verdict":"DENY","reason":"piping env to grep for secrets would display their values"}
+{"ts":"2026-04-05T07:21:36Z","hook":"secret-guard","verdict":"DENY","reason":"echo of secret env var would display its value"}
+{"ts":"2026-04-05T07:21:40Z","hook":"secret-guard","verdict":"DENY","reason":"echo of secret env var would display its value"}
+{"ts":"2026-04-06T01:09:30Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-07T07:51:26Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-07T11:55:26Z","hook":"secret-guard","verdict":"DENY","reason":"echo of secret env var would display its value"}
+{"ts":"2026-04-07T11:59:06Z","hook":"secret-guard","verdict":"WARN"}
+{"ts":"2026-04-07T12:12:55Z","hook":"secret-guard","verdict":"WARN"}
